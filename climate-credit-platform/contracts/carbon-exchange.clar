@@ -15,6 +15,21 @@
 (define-constant ERR-UNRECOGNIZED-PROJECT-TYPE (err u108))
 (define-constant ERR-LISTING-ALREADY-EXISTS (err u109))
 (define-constant ERR-LISTING-INACTIVE (err u110))
+(define-constant ERR-INVALID-QUANTITY (err u111))
+
+;; Constants for data validation
+(define-constant MIN-YEAR u2000)
+(define-constant MAX-YEAR u2100)
+(define-constant VCS "VCS")
+(define-constant GOLD-STANDARD "Gold Standard")
+(define-constant CDM "CDM")
+(define-constant CAR "CAR")
+(define-constant ACR "ACR")
+(define-constant FORESTRY "Forestry")
+(define-constant RENEWABLE-ENERGY "Renewable Energy")
+(define-constant METHANE-CAPTURE "Methane Capture")
+(define-constant ENERGY-EFFICIENCY "Energy Efficiency")
+(define-constant CARBON-CAPTURE "Carbon Capture")
 
 ;; Data Structures
 ;; Enhanced storage for carbon credits with detailed metadata and ownership tracking
@@ -70,6 +85,31 @@
 ;; Get details about a specific marketplace listing
 (define-read-only (get-market-listing (market-listing-id uint))
   (map-get? market-listings { market-listing-id: market-listing-id })
+)
+
+;; Validation helper functions
+(define-private (is-valid-year? (year uint))
+  (and (>= year MIN-YEAR) (<= year MAX-YEAR))
+)
+
+(define-private (is-valid-verification-protocol? (protocol (string-ascii 64)))
+  (or 
+    (is-eq protocol VCS)
+    (is-eq protocol GOLD-STANDARD)
+    (is-eq protocol CDM)
+    (is-eq protocol CAR)
+    (is-eq protocol ACR)
+  )
+)
+
+(define-private (is-valid-project-type? (project-type (string-ascii 64)))
+  (or
+    (is-eq project-type FORESTRY)
+    (is-eq project-type RENEWABLE-ENERGY)
+    (is-eq project-type METHANE-CAPTURE)
+    (is-eq project-type ENERGY-EFFICIENCY)
+    (is-eq project-type CARBON-CAPTURE)
+  )
 )
 
 ;; Public functions for marketplace interaction
@@ -227,29 +267,37 @@
                                       (environmental-initiative-category (string-ascii 64)))
   (let ((new-credit-id (var-get credit-id-counter)))
     ;; Admin authorization check
-    (if (is-eq tx-sender CONTRACT-ADMIN)
-      (begin
-        ;; Record the credit metadata
-        (map-set carbon-credit-details
-          { credit-identifier: new-credit-id }
-          {
-            credit-issuer: tx-sender,
-            production-year: production-year,
-            verification-protocol: verification-protocol,
-            environmental-initiative-category: environmental-initiative-category,
-            total-issued-amount: credit-amount
-          }
-        )
-        ;; Assign credits to the issuer
-        (map-set user-credit-holdings
-          { holder: tx-sender }
-          { credit-amount: (+ (get credit-amount (get-user-balance tx-sender)) credit-amount) }
-        )
-        ;; Update credit counter
-        (var-set credit-id-counter (+ new-credit-id u1))
-        (ok new-credit-id)
-      )
-      ERR-ADMIN-ONLY
+    (asserts! (is-eq tx-sender CONTRACT-ADMIN) ERR-ADMIN-ONLY)
+    
+    ;; Validate all inputs
+    (asserts! (> credit-amount u0) ERR-INVALID-QUANTITY)
+    (asserts! (is-valid-year? production-year) ERR-YEAR-OUT-OF-RANGE)
+    (asserts! (is-valid-verification-protocol? verification-protocol) ERR-UNKNOWN-VERIFICATION-STANDARD)
+    (asserts! (is-valid-project-type? environmental-initiative-category) ERR-UNRECOGNIZED-PROJECT-TYPE)
+    
+    ;; Record the credit metadata
+    (map-set carbon-credit-details
+      { credit-identifier: new-credit-id }
+      {
+        credit-issuer: tx-sender,
+        production-year: production-year,
+        verification-protocol: verification-protocol,
+        environmental-initiative-category: environmental-initiative-category,
+        total-issued-amount: credit-amount
+      }
     )
+    
+    ;; Get the current user balance
+    (let ((current-balance (get credit-amount (get-user-balance tx-sender))))
+      ;; Assign credits to the issuer
+      (map-set user-credit-holdings
+        { holder: tx-sender }
+        { credit-amount: (+ current-balance credit-amount) }
+      )
+    )
+    
+    ;; Update credit counter
+    (var-set credit-id-counter (+ new-credit-id u1))
+    (ok new-credit-id)
   )
 )
